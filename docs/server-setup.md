@@ -242,7 +242,7 @@ sudo rm /etc/nginx/sites-enabled/default
 
 | Параметр | Значение |
 |---|---|
-| Docker Engine | пакеты `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin` из официального репозитория `download.docker.com` (пакет `docker.io` не используется); версия — `docker version --format '{{.Server.Version}}'` |
+| Docker Engine | пакеты `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin` из официального репозитория `download.docker.com` (пакет `docker.io` не используется); версия 29.9.2 (проверка: `docker version --format '{{.Server.Version}}'`, требуется не ниже 28.0) |
 | Группа docker | `devops` (имеет sudo). Участник группы docker фактически получает права root, поэтому другие учётные записи не добавляются |
 | Проект | `~/app` пользователя devops (`/home/devops/app`), доставляется с хоста: `rsync -avz --delete --exclude=.env app/ devops:app/` |
 | Секреты | `~/app/.env`, права **600**, создаётся только на сервере, в репозиторий не попадает (`.gitignore`, `.dockerignore`) |
@@ -299,3 +299,7 @@ docker compose ps        # db — (healthy)
 # [VM]
 (cd ~/devops-course-2026 && scripts/audit.sh); echo $?     # 0 — все проверки пройдены
 ```
+
+## Примечание: VirtualBox и Hyper-V
+
+На хосте должен быть выключен гипервизор Windows (`bcdedit /set hypervisorlaunchtype off`, перезагрузка; включение обратно — `auto`). При активном Hyper-V (его включают Docker Desktop и WSL 2) VirtualBox работает в медленном режиме, и под нагрузкой Docker ядро ВМ сообщает `watchdog: BUG: soft lockup`. Значок процессора в строке состояния VirtualBox должен быть «V», а не черепаха.
