@@ -175,6 +175,67 @@ sudo ufw status verbose
 | `01-clean-install` | 27.10.2026 5:16 — после установки ОС и `apt upgrade`, машина выключена |
 | `02-keys-configured` | 27.10.2026 6:02 — пользователь `devops`, ключ, `~/.ssh/config` |
 | `03-ssh-hardened` | 27.10.2026 6:41 — `99-hardening.conf`, порт 2222, проброс 2222→2222 |
+| `04-nginx-https` | 03.11.2026 — Nginx, HTTPS, ресурс devops-site (ПР № 6) |
+
+## 8. Веб-сервер
+
+| Параметр | Значение |
+|---|---|
+| Пакет | `nginx` из репозитория Ubuntu (`sudo apt install -y nginx`), версия 1.24 |
+| Процессы | главный — `root` (читает конфигурацию, открывает порты 80/443, загружает ключ TLS), рабочие — `www-data` |
+| Конфигурация ресурса | `/etc/nginx/sites-available/devops-site`, ссылка в `/etc/nginx/sites-enabled/`; ссылка `sites-enabled/default` удалена (файл `sites-available/default` сохранён) |
+| Каталог ресурса | `/var/www/devops-site`, владелец `devops:devops`, каталоги 755, файлы 644 |
+| Сертификат | `/etc/ssl/certs/devops.crt`, `root:root`, 644, самоподписанный, CN и SAN `devops.local`, срок 365 дней |
+| Закрытый ключ | `/etc/ssl/private/devops.key`, `root:root`, **600** (рабочие процессы его не читают) |
+| Журналы | `/var/log/nginx/devops-site.access.log`, `/var/log/nginx/devops-site.error.log` |
+
+Формирование сертификата:
+
+```bash
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/devops.key -out /etc/ssl/certs/devops.crt \
+  -subj "/CN=devops.local" -addext "subjectAltName=DNS:devops.local"
+```
+
+Конфигурация `/etc/nginx/sites-available/devops-site`:
+
+```nginx
+server {                                   # HTTP -> HTTPS
+    listen 80;
+    listen [::]:80;
+    server_name devops.local;
+    return 301 https://$host$request_uri;
+}
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name devops.local;
+    ssl_certificate     /etc/ssl/certs/devops.crt;
+    ssl_certificate_key /etc/ssl/private/devops.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    root /var/www/devops-site;
+    index index.html;
+    location / {
+        try_files $uri $uri/ =404;
+    }
+    error_page 404 /404.html;
+    access_log /var/log/nginx/devops-site.access.log;
+    error_log /var/log/nginx/devops-site.error.log;
+}
+```
+
+Применение без прерывания обслуживания: `sudo nginx -t && sudo systemctl reload nginx` (не `restart`). HSTS не включается (сертификат самоподписанный).
+
+Каталог ресурса:
+
+```bash
+sudo mkdir -p /var/www/devops-site
+sudo chown -R devops:devops /var/www/devops-site
+sudo ln -s /etc/nginx/sites-available/devops-site /etc/nginx/sites-enabled/
+sudo rm /etc/nginx/sites-enabled/default
+```
+
+Доставка содержимого — с хоста (WSL 1) сценарием `scripts/deploy.sh` (rsync `--delete --chmod=D755,F644`, одно SSH-соединение, проверка `curl --cacert ~/devops.crt`). Доверенный сертификат на хосте: `scp devops:/etc/ssl/certs/devops.crt ~/devops.crt`.
 
 ## Контроль конфигурации
 
