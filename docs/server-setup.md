@@ -293,6 +293,39 @@ docker compose ps        # db — (healthy)
 
 Публикация порта на `0.0.0.0` обходит UFW (правила Docker в iptables применяются раньше), поэтому порт приложения публикуется только на `127.0.0.1`. `docker compose down -v` удаляет том с данными — не выполнять на рабочем сервере.
 
+## 10. Контрольная работа № 2: stats.devops.local
+
+| Параметр | Значение |
+|---|---|
+| Репозиторий | `https://github.com/DaryaKlyukvina/devops-kr2`, ветка `kr2/variant-3` (шаблон — remote `template`) |
+| Проект | `~/kr2`, доставка: `rsync -avz --delete --chmod=D755,F644 --exclude=.env --exclude=.git ./ devops:kr2/` |
+| Образ | `kr2-app:1.0` на базе `python:3.12-slim`, пользователь `app` (uid 10001), gunicorn на `0.0.0.0:8003` |
+| Секрет | `~/kr2/.env`, права **600**, `REDIS_PASSWORD` из `openssl rand -hex 32`; создаётся только на сервере |
+| Сервисы | `app` (`127.0.0.1:8003:8003`), `redis` (`redis:7-alpine`, `--appendonly yes --requirepass`, healthcheck `PING`); `restart: unless-stopped` |
+| Сеть и том | сеть `kr2_backend`, том `kr2_redis_data` → `/data` |
+| Сертификат | `/etc/ssl/certs/kr2.crt` (SAN `DNS:stats.devops.local`, 365 дней), ключ `/etc/ssl/private/kr2.key` — **600**, root |
+| Ресурс Nginx | `/etc/nginx/sites-available/kr2` (копия в репозитории: `deploy/nginx/kr2`), ссылка в `sites-enabled`; HTTP → 301 → HTTPS → `http://127.0.0.1:8003` |
+| Журналы | `/var/log/nginx/kr2.access.log`, `/var/log/nginx/kr2.error.log` |
+| Хост | `C:\Windows\System32\drivers\etc\hosts`: `192.168.56.101  stats.devops.local` |
+
+Восстановление:
+
+```bash
+# [VM]
+cd ~/kr2
+( umask 077; printf 'REDIS_PASSWORD=%s\n' "$(openssl rand -hex 32)" > .env )   # только если .env нет
+docker compose up -d --build                     # не экспортировать REDIS_PASSWORD в сессии
+sudo openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout /etc/ssl/private/kr2.key -out /etc/ssl/certs/kr2.crt \
+  -subj /CN=stats.devops.local -addext subjectAltName=DNS:stats.devops.local
+sudo chmod 600 /etc/ssl/private/kr2.key
+sudo install -m 644 ~/kr2/deploy/nginx/kr2 /etc/nginx/sites-available/kr2
+sudo ln -sfn /etc/nginx/sites-available/kr2 /etc/nginx/sites-enabled/kr2
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Правила UFW для этого ресурса не менялись: используются уже открытые 80 и 443.
+
 ## Контроль конфигурации
 
 ```bash
