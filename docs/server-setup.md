@@ -176,6 +176,7 @@ sudo ufw status verbose
 | `02-keys-configured` | 27.10.2026 6:02 — пользователь `devops`, ключ, `~/.ssh/config` |
 | `03-ssh-hardened` | 27.10.2026 6:41 — `99-hardening.conf`, порт 2222, проброс 2222→2222 |
 | `04-nginx-https` | 03.11.2026 — Nginx, HTTPS, ресурс devops-site (ПР № 6) |
+| `05-docker-compose` | 03.11.2026 — Docker Engine, проект `~/app` (ПР № 7) |
 
 ## 8. Веб-сервер
 
@@ -237,9 +238,68 @@ sudo rm /etc/nginx/sites-enabled/default
 
 Доставка содержимого — с хоста (WSL 1) сценарием `scripts/deploy.sh` (rsync `--delete --chmod=D755,F644`, одно SSH-соединение, проверка `curl --cacert ~/devops.crt`). Доверенный сертификат на хосте: `scp devops:/etc/ssl/certs/devops.crt ~/devops.crt`.
 
+## 9. Контейнеризация
+
+| Параметр | Значение |
+|---|---|
+| Docker Engine | пакеты `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin` из официального репозитория `download.docker.com` (пакет `docker.io` не используется); версия 29.9.2 (проверка: `docker version --format '{{.Server.Version}}'`, требуется не ниже 28.0) |
+| Группа docker | `devops` (имеет sudo). Участник группы docker фактически получает права root, поэтому другие учётные записи не добавляются |
+| Проект | `~/app` пользователя devops (`/home/devops/app`), доставляется с хоста: `rsync -avz --delete --exclude=.env app/ devops:app/` |
+| Секреты | `~/app/.env`, права **600**, создаётся только на сервере, в репозиторий не попадает (`.gitignore`, `.dockerignore`) |
+| Сервисы | `app` (образ `devops-app:1.0`, процесс от пользователя `app`), `db` (`postgres:16-alpine`, healthcheck `pg_isready`) |
+| Порты | `127.0.0.1:5000` → `app:5000`; порт 5432 не публикуется |
+| Сеть | пользовательская сеть `app_backend` (bridge), приложение обращается к СУБД по имени `db` |
+| Том | `app_db_data` → `/var/lib/postgresql/data` |
+| Обратный прокси | `https://devops.local/app/` → `http://127.0.0.1:5000/` |
+
+Установка Docker Engine:
+
+```bash
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker devops        # затем новая SSH-сессия
+docker run --rm hello-world
+```
+
+Если Docker Hub недоступен, в `/etc/docker/daemon.json` задаётся зеркало: `{ "registry-mirrors": ["https://mirror.gcr.io"] }`, затем `sudo systemctl restart docker`.
+
+Секрет на сервере:
+
+```bash
+cd ~/app
+cp .env.example .env
+chmod 600 .env
+sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+docker compose up -d --build
+docker compose ps        # db — (healthy)
+```
+
+Фрагмент блока HTTPS в `/etc/nginx/sites-available/devops-site` (перед `error_page`):
+
+```nginx
+    location /app/ {
+        proxy_pass http://127.0.0.1:5000/;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+```
+
+Публикация порта на `0.0.0.0` обходит UFW (правила Docker в iptables применяются раньше), поэтому порт приложения публикуется только на `127.0.0.1`. `docker compose down -v` удаляет том с данными — не выполнять на рабочем сервере.
+
 ## Контроль конфигурации
 
 ```bash
 # [VM]
 (cd ~/devops-course-2026 && scripts/audit.sh); echo $?     # 0 — все проверки пройдены
 ```
+
+## Примечание: VirtualBox и Hyper-V
+
+На хосте должен быть выключен гипервизор Windows (`bcdedit /set hypervisorlaunchtype off`, перезагрузка; включение обратно — `auto`). При активном Hyper-V (его включают Docker Desktop и WSL 2) VirtualBox работает в медленном режиме, и под нагрузкой Docker ядро ВМ сообщает `watchdog: BUG: soft lockup`. Значок процессора в строке состояния VirtualBox должен быть «V», а не черепаха.
